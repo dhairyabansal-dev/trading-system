@@ -1,2 +1,5 @@
-from .._stub import StubStrategy
-PatternStrategy=lambda:StubStrategy("pattern")
+from .engulfing import EngulfingPatternStrategy
+
+PatternStrategy = EngulfingPatternStrategy
+
+__all__ = ["EngulfingPatternStrategy", "PatternStrategy"]

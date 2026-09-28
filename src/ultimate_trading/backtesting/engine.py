@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+
 import pandas as pd
 
-from ..core.models import MarketData, Signal
+from ..core.models import MarketData, Regime, Signal
 from ..core.strategy import Strategy
 from ..data.loader import validate_ohlcv
+from ..regime.detector import RegimeDetector
 
 
 @dataclass(frozen=True)
@@ -72,9 +76,16 @@ class BacktestResult:
 
 
 class BacktestEngine:
+    """Event-driven candle backtester with next-open execution.
+
+    A signal is generated from information available through bar t and the
+    order is filled at bar t+1 open. This is the structural look-ahead guard.
+    """
+
     def __init__(self, config: BacktestConfig | None = None, splitter=None):
         self.config = config or BacktestConfig()
         self.splitter = splitter or WalkForwardSplitter()
+        self.regime_detector = RegimeDetector()
 
     def prepare(self, data: pd.DataFrame) -> Split:
         return self.splitter.split(data)
@@ -89,20 +100,57 @@ class BacktestEngine:
         data = validate_ohlcv(data)
         if train_fraction is not None:
             split = WalkForwardSplitter(train_fraction).split(data)
-            strategy.fit(split.train)
-            data = split.test
+            strategy.fit(split.train.copy())
+            # Preserve the training history as read-only context for indicator
+            # warm-up, while only bars in the test interval can create trades.
+            test = split.test
+            context_start = max(0, len(split.train) - 250)
+            data = pd.concat([split.train.iloc[context_start:], test])
+            return self._run_data(data, strategy, symbol, trade_start=test.index[0])
 
+        return self._run_data(data, strategy, symbol)
+
+    def run_ensemble(
+        self,
+        data: pd.DataFrame,
+        strategies: list[Strategy],
+        combiner,
+        symbol: str = "SYNTH",
+        train_fraction: float | None = None,
+        regime_detector: RegimeDetector | None = None,
+    ) -> BacktestResult:
+        if not strategies:
+            raise ValueError("at least one strategy is required")
+        data = validate_ohlcv(data)
+        trade_start = None
+        if train_fraction is not None:
+            split = WalkForwardSplitter(train_fraction).split(data)
+            for strategy in strategies:
+                strategy.fit(split.train.copy())
+            trade_start = split.test.index[0]
+            context_start = max(0, len(split.train) - 250)
+            data = pd.concat([split.train.iloc[context_start:], split.test])
+
+        detector = regime_detector or self.regime_detector
+
+        def ensemble_signal(md: MarketData) -> object:
+            regime = detector.detect(md.history)
+            results = [strategy.analyze(md) for strategy in strategies]
+            return combiner.combine(results, regime=regime)
+
+        return self._run_data(data, ensemble_signal, symbol, trade_start=trade_start)
+
+    def _run_data(self, data: pd.DataFrame, strategy_or_fn, symbol: str, trade_start=None) -> BacktestResult:
+        data = validate_ohlcv(data)
         equity = self.config.initial_capital
         peak = equity
-        equity_values = []
+        equity_values: list[tuple[pd.Timestamp, float]] = []
         trades: list[Trade] = []
         position = 0
         quantity = 0.0
         entry_price = 0.0
         entry_time = None
 
-        # Signals are computed using bar t and executed at bar t+1 open.
-        # This prevents same-bar look-ahead.
         for i in range(len(data) - 1):
             row = data.iloc[i]
             history = data.iloc[: i + 1]
@@ -116,45 +164,37 @@ class BacktestEngine:
                 volume=float(row.volume),
                 history=history,
             )
-            result = strategy.analyze(md)
-            next_open = float(data.iloc[i + 1].open)
+            result = strategy_or_fn(md)
+            next_time = data.index[i + 1]
+            if trade_start is not None and next_time < trade_start:
+                continue
 
             desired = 1 if result.signal == Signal.BUY else -1 if result.signal == Signal.SELL else 0
-            desired = desired if result.confidence > 0 else 0
+            if result.confidence <= 0:
+                desired = 0
 
             if position != 0 and desired != position:
-                exit_price = self._adjust_price(next_open, -position)
+                exit_price = self._adjust_price(float(data.iloc[i + 1].open), -position)
                 gross = position * quantity * (exit_price - entry_price)
                 costs = self._cost(entry_price * quantity) + self._cost(exit_price * quantity)
                 net = gross - costs
                 equity += net
-                trades.append(Trade(
-                    entry_time=entry_time,
-                    exit_time=data.index[i + 1],
-                    side=position,
-                    entry_price=entry_price,
-                    exit_price=exit_price,
-                    quantity=quantity,
-                    gross_pnl=gross,
-                    costs=costs,
-                    net_pnl=net,
-                    return_pct=net / (abs(entry_price * quantity) or 1),
-                ))
+                trades.append(self._trade(entry_time, next_time, position, entry_price, exit_price, quantity, gross, costs, net))
                 position = 0
                 quantity = 0.0
 
             if position == 0 and desired != 0:
                 notional = equity * self.config.max_position_fraction * min(1.0, result.confidence)
-                entry_price = self._adjust_price(next_open, desired)
+                entry_price = self._adjust_price(float(data.iloc[i + 1].open), desired)
                 quantity = notional / entry_price
                 position = desired
-                entry_time = data.index[i + 1]
+                entry_time = next_time
 
             mark = float(data.iloc[i + 1].close)
             unrealized = position * quantity * (mark - entry_price) if position else 0.0
             marked_equity = equity + unrealized
             peak = max(peak, marked_equity)
-            equity_values.append((data.index[i + 1], marked_equity))
+            equity_values.append((next_time, marked_equity))
 
         if position:
             final_time = data.index[-1]
@@ -163,24 +203,14 @@ class BacktestEngine:
             costs = self._cost(entry_price * quantity) + self._cost(exit_price * quantity)
             net = gross - costs
             equity += net
-            trades.append(Trade(
-                entry_time=entry_time,
-                exit_time=final_time,
-                side=position,
-                entry_price=entry_price,
-                exit_price=exit_price,
-                quantity=quantity,
-                gross_pnl=gross,
-                costs=costs,
-                net_pnl=net,
-                return_pct=net / (abs(entry_price * quantity) or 1),
-            ))
+            trades.append(self._trade(entry_time, final_time, position, entry_price, exit_price, quantity, gross, costs, net))
             if equity_values:
                 equity_values[-1] = (final_time, equity)
 
         curve = pd.Series(dict(equity_values), dtype=float)
         if curve.empty:
             curve = pd.Series([self.config.initial_capital], index=[data.index[-1]], dtype=float)
+
         returns = curve.pct_change().dropna()
         running_peak = curve.cummax()
         drawdown = curve / running_peak - 1.0
@@ -188,7 +218,8 @@ class BacktestEngine:
         sharpe = float((returns.mean() / returns.std()) * (252 ** 0.5)) if len(returns) > 1 and returns.std() > 0 else 0.0
         wins = [t.net_pnl for t in trades if t.net_pnl > 0]
         losses = [-t.net_pnl for t in trades if t.net_pnl < 0]
-        pf = float(sum(wins) / sum(losses)) if losses else float("inf") if wins else 0.0
+        profit_factor = float(sum(wins) / sum(losses)) if losses else (float("inf") if wins else 0.0)
+
         return BacktestResult(
             equity_curve=curve,
             trades=tuple(trades),
@@ -196,7 +227,22 @@ class BacktestEngine:
             max_drawdown=max_dd,
             sharpe=sharpe,
             win_rate=float(len(wins) / len(trades)) if trades else 0.0,
-            profit_factor=pf,
+            profit_factor=profit_factor,
+        )
+
+    @staticmethod
+    def _trade(entry_time, exit_time, side, entry_price, exit_price, quantity, gross, costs, net) -> Trade:
+        return Trade(
+            entry_time=entry_time,
+            exit_time=exit_time,
+            side=side,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            quantity=quantity,
+            gross_pnl=gross,
+            costs=costs,
+            net_pnl=net,
+            return_pct=net / (abs(entry_price * quantity) or 1.0),
         )
 
     def _cost(self, notional: float) -> float:

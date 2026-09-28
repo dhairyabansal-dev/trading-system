@@ -1,2 +1,5 @@
-from .._stub import StubStrategy
-BreakoutStrategy=lambda:StubStrategy("breakout")
+from .donchian import DonchianBreakoutStrategy
+
+BreakoutStrategy = DonchianBreakoutStrategy
+
+__all__ = ["DonchianBreakoutStrategy", "BreakoutStrategy"]

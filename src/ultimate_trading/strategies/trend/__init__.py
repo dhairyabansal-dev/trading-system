@@ -1,2 +1,5 @@
-from .._stub import StubStrategy
-TrendStrategy=lambda:StubStrategy("trend")
+from .sma import SMATrendStrategy
+
+TrendStrategy = SMATrendStrategy
+
+__all__ = ["SMATrendStrategy", "TrendStrategy"]

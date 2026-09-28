@@ -1,2 +1,5 @@
-from .._stub import StubStrategy
-MeanReversionStrategy=lambda:StubStrategy("mean_reversion")
+from .zscore import ZScoreMeanReversionStrategy
+
+MeanReversionStrategy = ZScoreMeanReversionStrategy
+
+__all__ = ["ZScoreMeanReversionStrategy", "MeanReversionStrategy"]
