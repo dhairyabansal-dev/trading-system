@@ -1,0 +1,23 @@
+# Milestone 0 config — one strategy, paper trading, walk-forward backtest.
+
+data:
+  mode: synthetic          # only "synthetic" exists until a real data loader is added
+  n_bars: 1000
+  seed: 42
+  regime_shift_at: 600      # halfway-ish drift flip, so momentum sees both a trend and a reversal
+
+backtest:
+  train_fraction: 0.7
+  starting_cash: 10000.0
+
+strategy:
+  name: simple_momentum
+  lookback: 20
+  buy_threshold: 0.03
+  sell_threshold: -0.03
+  ranging_confidence_penalty: 0.5
+
+risk:
+  max_position_fraction: 0.25
+  min_confidence_to_act: 0.2
+  max_drawdown_halt: 0.25
