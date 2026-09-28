@@ -17,3 +17,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff.lint]
+ignore = ["I001", "RUF022", "UP017"]
