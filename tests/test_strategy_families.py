@@ -48,9 +48,11 @@ def test_strategy_family_contracts():
 
 def test_donchian_uses_prior_channel_not_current_high():
     data = generate_ohlcv(80, seed=3)
-    data.iloc[-1, data.columns.get_loc("close")] = data["high"].iloc[-2] * 1.01
+    current_high_before = float(data["high"].iloc[-1])
+    data.iloc[-1, data.columns.get_loc("high")] = current_high_before * 10.0
+    data.iloc[-1, data.columns.get_loc("close")] = current_high_before * 2.0
     result = DonchianBreakoutStrategy(window=20).analyze(md(data))
-    assert result.metadata["donchian_upper"] <= data["high"].iloc[-2]
+    assert result.metadata["donchian_upper"] < data["high"].iloc[-1]
 
 
 def test_regime_affinity_changes_ensemble_weight():
