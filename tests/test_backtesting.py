@@ -1,8 +1,7 @@
-import pandas as pd
 import pytest
 
 from ultimate_trading.backtesting.engine import BacktestConfig, BacktestEngine, WalkForwardSplitter
-from ultimate_trading.core.models import Signal, StrategyResult, MarketData
+from ultimate_trading.core.models import MarketData, Signal, StrategyResult
 from ultimate_trading.core.strategy import Strategy
 from ultimate_trading.data.loader import validate_ohlcv
 from ultimate_trading.data.synthetic import generate_ohlcv
