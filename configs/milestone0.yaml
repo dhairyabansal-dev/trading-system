@@ -1,0 +1,13 @@
+data:
+  source: synthetic
+  timeframe: 15m
+  seed: 42
+backtest:
+  train_fraction: 0.70
+combiner:
+  type: passthrough
+  min_oos_trades: 30
+risk:
+  max_position_fraction: 0.25
+  min_confidence: 0.20
+  max_drawdown_halt: 0.25
