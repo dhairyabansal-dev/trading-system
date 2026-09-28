@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from ..core.models import MarketData, Regime, Signal
+from ..core.models import MarketData, Signal
 from ..core.strategy import Strategy
 from ..data.loader import validate_ohlcv
 from ..regime.detector import RegimeDetector
