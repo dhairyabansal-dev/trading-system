@@ -1,5 +1,3 @@
-from dataclasses import asdict
-
 import pandas as pd
 
 from .backtesting.engine import BacktestEngine, BacktestResult
