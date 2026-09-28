@@ -164,7 +164,7 @@ class BacktestEngine:
                 volume=float(row.volume),
                 history=history,
             )
-            result = strategy_or_fn(md)
+            result = strategy_or_fn(md) if callable(strategy_or_fn) else strategy_or_fn.analyze(md)
             next_time = data.index[i + 1]
             if trade_start is not None and next_time < trade_start:
                 continue
